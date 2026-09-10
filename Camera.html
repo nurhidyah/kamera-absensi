@@ -1,1 +1,249 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
+  <title>Kamera Absensi</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+      background: #f1f5f9;
+      text-align: center;
+    }
+
+    h2 {
+      margin-bottom: 10px;
+    }
+
+    #status {
+      margin: 10px 0 15px;
+      color: #475569;
+    }
+
+    video {
+      width: 100%;
+      max-width: 600px;
+      height: 400px;
+      object-fit: cover;
+      background: #000;
+      border-radius: 15px;
+    }
+
+    button {
+      margin-top: 15px;
+      padding: 12px 25px;
+      border: none;
+      border-radius: 10px;
+      background: #2563eb;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      background: #94a3b8;
+    }
+
+    canvas {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>📷 Kamera Absensi</h2>
+
+  <div id="status">
+    Memuat kamera...
+  </div>
+
+  <video id="video" autoplay playsinline></video>
+
+  <br>
+
+  <button id="btnAmbil" onclick="ambilFoto()" disabled>
+    Ambil Foto
+  </button>
+
+  <canvas id="canvas"></canvas>
+
+  <script>
+
+    let stream = null;
+
+    const params = new URLSearchParams(window.location.search);
+
+    const mode = params.get("mode") || "register";
+
+    const returnOrigin =
+      params.get("origin") || "*";
+
+    const video = document.getElementById("video");
+    const btnAmbil = document.getElementById("btnAmbil");
+    const statusText = document.getElementById("status");
+
+
+    async function bukaKamera() {
+
+      try {
+
+        statusText.innerText =
+          "Meminta izin kamera...";
+
+        if (
+          !navigator.mediaDevices ||
+          !navigator.mediaDevices.getUserMedia
+        ) {
+
+          throw new Error(
+            "Browser tidak mendukung akses kamera."
+          );
+
+        }
+
+
+        stream =
+          await navigator.mediaDevices.getUserMedia({
+
+            video: {
+              facingMode: "user",
+              width: {
+                ideal: 640
+              },
+              height: {
+                ideal: 480
+              }
+            },
+
+            audio: false
+
+          });
+
+
+        video.srcObject = stream;
+
+        await video.play();
+
+        statusText.innerText =
+          "Kamera siap. Silakan ambil foto.";
+
+        btnAmbil.disabled = false;
+
+      }
+
+      catch (error) {
+
+        console.error(error);
+
+        statusText.innerText =
+          "❌ Kamera tidak dapat dibuka.";
+
+        alert(
+          "Kamera gagal dibuka.\n\n" +
+          "Penyebab: " + error.message +
+          "\n\n" +
+          "Pastikan izin kamera di Chrome sudah diberikan."
+        );
+
+      }
+
+    }
+
+
+    function ambilFoto() {
+
+      if (!video.videoWidth) {
+
+        alert("Kamera belum siap.");
+
+        return;
+
+      }
+
+
+      const canvas =
+        document.getElementById("canvas");
+
+      canvas.width =
+        video.videoWidth;
+
+      canvas.height =
+        video.videoHeight;
+
+
+      const ctx =
+        canvas.getContext("2d");
+
+      ctx.drawImage(
+        video,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+
+
+      const foto =
+        canvas.toDataURL(
+          "image/jpeg",
+          0.85
+        );
+
+
+      statusText.innerText =
+        "Foto berhasil diambil.";
+
+
+      // Kirim foto kembali ke halaman utama
+      if (window.opener && !window.opener.closed) {
+
+        window.opener.postMessage(
+
+          {
+            type: "CAMERA_RESULT",
+            mode: mode,
+            foto: foto
+          },
+
+          returnOrigin
+
+        );
+
+      }
+
+
+      // Matikan kamera
+      if (stream) {
+
+        stream.getTracks().forEach(
+          track => track.stop()
+        );
+
+      }
+
+
+      setTimeout(() => {
+
+        window.close();
+
+      }, 500);
+
+    }
+
+
+    // Jalankan kamera
+    bukaKamera();
+
+  </script>
+
+</body>
+</html>
