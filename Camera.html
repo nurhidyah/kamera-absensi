@@ -1,249 +1,232 @@
 <!DOCTYPE html>
-<html>
+<html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <title>Kamera Absensi</title>
-
+  <title>Kamera Absensi Magang</title>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
   <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      padding: 20px;
-      font-family: Arial, sans-serif;
-      background: #f1f5f9;
-      text-align: center;
-    }
-
-    h2 {
-      margin-bottom: 10px;
-    }
-
-    #status {
-      margin: 10px 0 15px;
-      color: #475569;
-    }
-
-    video {
-      width: 100%;
-      max-width: 600px;
-      height: 400px;
-      object-fit: cover;
-      background: #000;
-      border-radius: 15px;
-    }
-
-    button {
-      margin-top: 15px;
-      padding: 12px 25px;
-      border: none;
-      border-radius: 10px;
-      background: #2563eb;
-      color: white;
-      font-size: 16px;
-      cursor: pointer;
-    }
-
-    button:disabled {
-      background: #94a3b8;
-    }
-
-    canvas {
-      display: none;
-    }
+    *{box-sizing:border-box}body{margin:0;background:#0f172a;color:#fff;font-family:Arial,sans-serif}
+    .box{width:min(92vw,650px);margin:20px auto;background:#1e293b;border-radius:18px;padding:20px;box-shadow:0 20px 50px #0006}
+    h1{text-align:center;margin:0 0 10px;font-size:24px}.info{text-align:center;color:#cbd5e1;font-size:14px;margin-bottom:14px}
+    .video-wrap{position:relative;width:100%;aspect-ratio:4/3;background:#020617;border-radius:14px;overflow:hidden}
+    video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+    canvas{display:none}.preview{display:none;width:100%;border-radius:14px;margin-top:12px}
+    .status{margin:12px 0;padding:12px;border-radius:10px;background:#0f172a;text-align:center;font-size:14px}
+    .buttons{display:flex;gap:10px}.buttons button{flex:1;border:0;border-radius:10px;padding:13px;font-weight:bold;cursor:pointer}
+    #btnBatal{background:#475569;color:#fff}#btnFoto{background:#2563eb;color:#fff}button:disabled{opacity:.5;cursor:not-allowed}
+    .badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#334155;font-size:12px;margin-bottom:10px}
   </style>
 </head>
-
 <body>
-
-  <h2>📷 Kamera Absensi</h2>
-
-  <div id="status">
-    Memuat kamera...
-  </div>
-
-  <video id="video" autoplay playsinline></video>
-
-  <br>
-
-  <button id="btnAmbil" onclick="ambilFoto()" disabled>
-    Ambil Foto
-  </button>
-
+<div class="box">
+  <div style="text-align:center"><span class="badge" id="modeBadge">Kamera</span></div>
+  <h1 id="judul">📷 Kamera</h1>
+  <div class="info">Posisikan satu wajah di tengah kamera. Pastikan pencahayaan cukup dan wajah terlihat jelas.</div>
+  <div class="video-wrap"><video id="video" autoplay muted playsinline></video></div>
   <canvas id="canvas"></canvas>
+  <img id="preview" class="preview" alt="Preview">
+  <div id="status" class="status">Menyiapkan kamera...</div>
+  <div class="buttons">
+    <button id="btnBatal" type="button" onclick="batal()">Batal</button>
+    <button id="btnFoto" type="button" onclick="ambilFoto()" disabled>📸 Scan & Ambil Foto</button>
+  </div>
+</div>
 
-  <script>
+<script>
+const params = new URLSearchParams(location.search);
+const mode = params.get("mode") || "register";
+const returnOrigin = params.get("origin") || "";
+const MODEL_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
+const MATCH_THRESHOLD = 0.52;
 
-    let stream = null;
+let stream = null;
+let modelsReady = false;
+let expectedDescriptor = null;
+let latestDetection = null;
+let readySent = false;
 
-    const params = new URLSearchParams(window.location.search);
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const preview = document.getElementById("preview");
+const statusText = document.getElementById("status");
+const btnFoto = document.getElementById("btnFoto");
+const judul = document.getElementById("judul");
+const modeBadge = document.getElementById("modeBadge");
 
-    const mode = params.get("mode") || "register";
+modeBadge.textContent = mode === "absen" ? "ABSENSI" : "REGISTRASI";
+judul.textContent = mode === "absen" ? "📸 Scan Wajah Absensi" : "📷 Registrasi Wajah";
 
-    const returnOrigin =
-      params.get("origin") || "*";
+function targetOrigin() {
+  try { return new URL(returnOrigin).origin; } catch(e) { return "*"; }
+}
+function kirim(data) {
+  if (!window.opener) {
+    statusText.textContent = "Jendela utama tidak ditemukan. Tutup kamera dan buka dari aplikasi.";
+    return;
+  }
+  window.opener.postMessage(data, targetOrigin());
+}
+function setStatus(text, good=false, bad=false) {
+  statusText.textContent = text;
+  statusText.style.color = good ? "#86efac" : bad ? "#fca5a5" : "#e2e8f0";
+}
 
-    const video = document.getElementById("video");
-    const btnAmbil = document.getElementById("btnAmbil");
-    const statusText = document.getElementById("status");
+async function loadModels() {
+  setStatus("Memuat model pengenalan wajah...");
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+  modelsReady = true;
+}
 
+async function mulaiKamera() {
+  try {
+    await loadModels();
+    setStatus("Mengaktifkan kamera...");
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width:{ideal:640}, height:{ideal:480}, facingMode:"user" },
+      audio:false
+    });
+    video.srcObject = stream;
+    await video.play();
+    btnFoto.disabled = false;
+    setStatus("Kamera aktif. Pastikan tepat satu wajah terlihat.");
+    if (!readySent) {
+      readySent = true;
+      kirim({type:"CAMERA_READY", mode:mode});
+    }
+    mulaiDeteksiOtomatis();
+  } catch(e) {
+    console.error(e);
+    setStatus("Kamera/model gagal dimuat: " + (e.message || e), false, true);
+  }
+}
 
-    async function bukaKamera() {
+async function deteksiWajah() {
+  if (!modelsReady || video.readyState < 2) return null;
+  const result = await faceapi
+    .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({inputSize:320, scoreThreshold:0.5}))
+    .withFaceLandmarks()
+    .withFaceDescriptors();
+  latestDetection = result;
+  return result;
+}
 
-      try {
-
-        statusText.innerText =
-          "Meminta izin kamera...";
-
-        if (
-          !navigator.mediaDevices ||
-          !navigator.mediaDevices.getUserMedia
-        ) {
-
-          throw new Error(
-            "Browser tidak mendukung akses kamera."
-          );
-
+let detectionTimer = null;
+function mulaiDeteksiOtomatis() {
+  clearInterval(detectionTimer);
+  detectionTimer = setInterval(async () => {
+    try {
+      const faces = await deteksiWajah();
+      if (!faces) return;
+      if (faces.length === 0) {
+        setStatus("Wajah belum terdeteksi.");
+      } else if (faces.length > 1) {
+        setStatus("Terdeteksi lebih dari satu wajah. Hanya satu wajah yang boleh.", false, true);
+      } else if (mode === "absen" && expectedDescriptor) {
+        const distance = faceapi.euclideanDistance(
+          expectedDescriptor, faces[0].descriptor
+        );
+        if (distance <= MATCH_THRESHOLD) {
+          setStatus("Wajah cocok. Siap melakukan absensi.", true);
+        } else {
+          setStatus("Wajah belum cocok dengan akun ini. Jarak: " + distance.toFixed(3), false, true);
         }
-
-
-        stream =
-          await navigator.mediaDevices.getUserMedia({
-
-            video: {
-              facingMode: "user",
-              width: {
-                ideal: 640
-              },
-              height: {
-                ideal: 480
-              }
-            },
-
-            audio: false
-
-          });
-
-
-        video.srcObject = stream;
-
-        await video.play();
-
-        statusText.innerText =
-          "Kamera siap. Silakan ambil foto.";
-
-        btnAmbil.disabled = false;
-
+      } else {
+        setStatus("Satu wajah terdeteksi. Siap dipindai.", true);
       }
+    } catch(e) {
+      console.warn("Deteksi:", e);
+    }
+  }, 900);
+}
 
-      catch (error) {
-
-        console.error(error);
-
-        statusText.innerText =
-          "❌ Kamera tidak dapat dibuka.";
-
-        alert(
-          "Kamera gagal dibuka.\n\n" +
-          "Penyebab: " + error.message +
-          "\n\n" +
-          "Pastikan izin kamera di Chrome sudah diberikan."
-        );
-
-      }
-
+async function ambilFoto() {
+  if (!modelsReady) return alert("Model wajah belum siap.");
+  btnFoto.disabled = true;
+  setStatus("Memeriksa wajah...");
+  try {
+    const faces = await deteksiWajah();
+    if (!faces || faces.length !== 1) {
+      throw new Error(faces && faces.length > 1
+        ? "Terdeteksi lebih dari satu wajah."
+        : "Wajah tidak terdeteksi.");
     }
 
+    const faceDescriptor = Array.from(faces[0].descriptor);
+    let match = true;
+    let distance = 0;
 
-    function ambilFoto() {
-
-      if (!video.videoWidth) {
-
-        alert("Kamera belum siap.");
-
-        return;
-
+    if (mode === "absen") {
+      if (!expectedDescriptor || expectedDescriptor.length !== 128) {
+        throw new Error("Data wajah akun belum tersedia. Silakan daftar ulang atau hubungi admin.");
       }
-
-
-      const canvas =
-        document.getElementById("canvas");
-
-      canvas.width =
-        video.videoWidth;
-
-      canvas.height =
-        video.videoHeight;
-
-
-      const ctx =
-        canvas.getContext("2d");
-
-      ctx.drawImage(
-        video,
-        0,
-        0,
-        canvas.width,
-        canvas.height
-      );
-
-
-      const foto =
-        canvas.toDataURL(
-          "image/jpeg",
-          0.85
-        );
-
-
-      statusText.innerText =
-        "Foto berhasil diambil.";
-
-
-      // Kirim foto kembali ke halaman utama
-      if (window.opener && !window.opener.closed) {
-
-        window.opener.postMessage(
-
-          {
-            type: "CAMERA_RESULT",
-            mode: mode,
-            foto: foto
-          },
-
-          returnOrigin
-
-        );
-
+      distance = faceapi.euclideanDistance(expectedDescriptor, faceDescriptor);
+      match = distance <= MATCH_THRESHOLD;
+      if (!match) {
+        throw new Error("Wajah tidak cocok dengan akun yang sedang login. Jarak kecocokan: " + distance.toFixed(3));
       }
-
-
-      // Matikan kamera
-      if (stream) {
-
-        stream.getTracks().forEach(
-          track => track.stop()
-        );
-
-      }
-
-
-      setTimeout(() => {
-
-        window.close();
-
-      }, 500);
-
     }
 
+    const w = Math.min(video.videoWidth || 640, 640);
+    const h = Math.round(w * (video.videoHeight || 480) / (video.videoWidth || 640));
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.save(); ctx.translate(w,0); ctx.scale(-1,1);
+    ctx.drawImage(video,0,0,w,h); ctx.restore();
 
-    // Jalankan kamera
-    bukaKamera();
+    const fotoBase64 = canvas.toDataURL("image/jpeg", 0.72);
+    preview.src = fotoBase64; preview.style.display = "block";
+    setStatus("Scan berhasil. Mengirim hasil ke aplikasi...", true);
+    matikanKamera();
 
-  </script>
+    kirim({
+      type:"CAMERA_RESULT",
+      mode:mode,
+      foto:fotoBase64,
+      faceDescriptor:faceDescriptor,
+      faceMatch:match,
+      faceDistance:distance
+    });
+    setTimeout(() => window.close(), 400);
+  } catch(e) {
+    setStatus(e.message || "Gagal memproses wajah.", false, true);
+    btnFoto.disabled = false;
+  }
+}
 
+window.addEventListener("message", function(event) {
+  if (event.origin !== targetOrigin()) return;
+  const data = event.data || {};
+  if (data.type !== "CAMERA_CONFIG" || data.mode !== mode) return;
+  if (mode === "absen" && Array.isArray(data.faceDescriptor)) {
+    expectedDescriptor = data.faceDescriptor.map(Number);
+    if (expectedDescriptor.length !== 128) {
+      expectedDescriptor = null;
+      setStatus("Descriptor wajah akun tidak valid.", false, true);
+    } else {
+      setStatus("Data wajah akun diterima. Silakan arahkan wajah ke kamera.");
+    }
+  }
+});
+
+function batal() {
+  matikanKamera();
+  kirim({type:"CAMERA_CANCEL", mode:mode});
+  setTimeout(() => window.close(), 100);
+}
+function matikanKamera() {
+  clearInterval(detectionTimer);
+  detectionTimer = null;
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
+  video.srcObject = null;
+}
+window.addEventListener("beforeunload", matikanKamera);
+mulaiKamera();
+</script>
 </body>
 </html>
